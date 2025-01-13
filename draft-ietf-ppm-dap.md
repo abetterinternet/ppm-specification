@@ -596,7 +596,7 @@ the "aggregation function" and `agg_result` the "aggregate result".
 DAP is extensible in that it allows for the addition of new cryptographic
 schemes that compute different aggregation functions. In particular, the
 aggregation function is determined by the Verifiable Distributed Aggregation
-Function, or VDAF {{!VDAF=I-D.draft-irtf-cfrg-vdaf-13}}, used to securely
+Function, or VDAF {{!VDAF=I-D.draft-irtf-cfrg-vdaf-14}}, used to securely
 compute it.
 
 VDAFs rely on secret sharing to protect the privacy of the measurements. Rather
