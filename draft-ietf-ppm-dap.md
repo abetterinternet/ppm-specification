@@ -978,7 +978,7 @@ the following parameters associated with it:
   batch mode.
 * `task_start`: The time from which the Clients will start uploading reports to
   a task. Aggregators MUST reject reports with timestamps earlier than
-  `task_start`.
+  `task_start` as described in {{input-share-validation}}.
 * `task_duration`: The duration of a task. The task is considered completed
   after the end time `task_start + task_duration`. Aggregators MUST reject
   reports that have timestamps later than the end time, and MAY choose to opt
@@ -1255,7 +1255,8 @@ Clients SHOULD NOT upload the same measurement value in more than one report if
 the Leader responds with HTTP status code 201 Created.
 
 If the Leader does not recognize the task ID, then it MUST abort with error
-`unrecognizedTask`.
+`unrecognizedTask`. Note that indicating an unrecognized task might indicate
+that the Client is misconfigured or the task has expired.
 
 The Leader responds to requests whose Leader encrypted input share uses an
 out-of-date or unknown `HpkeConfig.id` value, indicated by
