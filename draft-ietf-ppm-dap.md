@@ -983,9 +983,7 @@ the following parameters associated with it:
   after the end time `task_start + task_duration`. Aggregators MUST reject
   reports that have timestamps later than the end time, and MAY choose to opt
   out of the task if `task_duration` is too long.
-* `time_precision`: Clients use this value to truncate their report timestamps;
-  see {{upload-flow}}. Additional semantics may apply, depending on the batch
-  mode. (See {{batch-validation}} for details.)
+* `time_precision`: Used to compute timestamps in DAP. See {{timestamps}}.
 * A unique identifier for the VDAF in use for the task, e.g., one of the VDAFs
   defined in {{Section 10 of !VDAF}}.
 * `min_batch_size`: The smallest number of reports the batch is allowed to
@@ -1038,6 +1036,42 @@ For example, given a helper URL "https://example.com/api/dap", task ID "f0 16 34
 `{helper}/tasks/{task-id}/aggregation_jobs/{aggregation-job-id}` would be
 expanded into
 `https://example.com/api/dap/tasks/8BY0RzZMzxvA46_8ymhzycOB9krN-QIGYvg_RsByGec/aggregation_jobs/lc7aUeGpdSNosNlh-UZhKA`.
+
+## Timestamps and Time Intervals {#timestamps}
+
+DAP uses timestamps in various places:
+
+* The task configuration includes a validity interval ({{task-configuration}}).
+  The interval includes a timestamp indicating when the interval begins.
+* The Client's report includes a timestamp indicating when the report was
+  generated ({{upload-flow}}).
+* The Collector's query may specify a time interval for reports it wants to
+  aggregate ({{time-interval-batch-mode}}).
+* The result of a collection job indicates the range of timestamps of reports
+  included in the aggregate result ({{collect-flow}}).
+
+A timestamp has type `Time` and its value is the number of seconds since the
+UNIX epoch. In addition, every timestamp MUST be rounded to the nearest
+multiple of `time_precision` ({{task-configuration}}). That is, the value is
+computed as
+
+~~~
+sent_timestamp = timestamp - (timestamp % time_precision)
+~~~
+
+A received timestamp is considered to be malformed if `received_timestamp %
+time_precision > 0`.
+
+A time interval has type `Interval` and consists of a timestamp indicating the
+start of the interval and a duration. The duration has type `Duration` and its
+value is a number of seconds. The duration MUST be a multiple of
+`time_precision`: if `duration % time_precision > 0`, then the interval is
+considered to be malformed.
+
+Truncating timestamps has multiple purposes. Clients truncate their report
+timestamp in order to avoid reducing the size of the anonymity set; see
+{{anon-proxy}}. It also helps Aggregators manage resources; see
+{{sharding-storage}}.
 
 ## Uploading Reports {#upload-flow}
 
@@ -1133,10 +1167,8 @@ struct {
       replayed ({{agg-flow}}). The Client MUST generate this by generating 16
       random bytes using a cryptographically secure random number generator.
 
-    * `time` is the time at which the report was generated. The Client SHOULD
-      round this value down to the nearest multiple of the task's
-      `time_precision` in order to ensure that that the timestamp cannot be used
-      to link a report back to the Client that generated it.
+    * `time` is the time at which the report was generated. The Client MUST
+      truncate their timestamp as described in {{timestamps}}.
 
     * `public_extensions` is the list of public report extensions; see
       {{report-extensions}}.
@@ -1876,6 +1908,10 @@ following checks:
 1. Check that the input share can be decoded as specified by the VDAF. If not,
    the input share MUST be marked as invalid with the error `invalid_message`.
 
+1. Check that the report's timestamp is well-formed as specified in
+   {{timestamps}}. If not, the Aggregator MUST mark the input share as invalid
+   with error `invalid_message`.
+
 1. Check if the report's timestamp is too far in the future. If the report's
    timestamp is more than a few minutes ahead of the current time, then the
    Aggregator SHOULD mark the input share as invalid with error
@@ -1915,7 +1951,7 @@ following checks:
    MUST mark the input share as invalid with error `report_dropped`.
    For example, the report timestamp may be so far in the past that the state
    required to perform the check has been evicted from the Aggregator's
-   long-term storage. See {{reducing-storage-requirements}} for details.
+   long-term storage. See {{sharding-storage}} for details.
 
 If all of the above checks succeed, the input share is not marked as invalid.
 
@@ -2353,10 +2389,9 @@ structure includes the following:
 * `report_count`: The number of reports included in the batch.
 
 * `interval`: The smallest interval of time that contains the timestamps of all
-  reports included in the batch, such that the interval's start and duration
-  are both multiples of the task's `time_precision` parameter. Note that in the
-  case of a time-interval query ({{time-interval-batch-mode}}), this interval
-  can be smaller than the one in the corresponding `CollectionJobReq.query`.
+  reports included in the batch. Note that in the case of a time-interval query
+  ({{time-interval-batch-mode}}), this interval can be smaller than the one in
+  the corresponding `CollectionJobReq.query`.
 
 * `leader_encrypted_agg_share`: The Leader's aggregate share, encrypted to the
   Collector (see {{aggregate-share-encrypt}}).
@@ -2695,7 +2730,9 @@ struct {
 } TimeIntervalQueryConfig;
 ~~~
 
-where `batch_interval` is the batch interval requested by the Collector.
+where `batch_interval` is the batch interval requested by the Collector. The
+interval MUST be well-formed as specified in {{timestamps}}. Otherwise, the
+query does not specify a set of valid batch buckets.
 
 ### Partial Batch Selector Configuration
 
@@ -2934,17 +2971,15 @@ against the urgency of responding to a soft deadline.
 Not all DAP tasks have the same operational requirements, so the protocol is
 designed to allow implementations to reduce operational costs in certain cases.
 
-### Reducing Storage Requirements
+### Reducing Storage Requirements {#sharding-storage}
 
 In general, the Aggregators are required to keep state for tasks and all valid
 reports for as long as collection requests can be made for them. However, it is
-not necessary to store the complete reports. Each Aggregator only needs to store
-an aggregate share for each possible batch interval (for time-interval) or batch
-ID (for leader-selected), along with a flag indicating whether the aggregate
-share has been collected. This is due to the requirement that in the
-time-interval case, the batch interval respect the boundaries defined by the DAP
-parameters; and that in leader-selected case, a batch is determined entirely by
-a batch ID. (See {{batch-validation}}.)
+not necessary to store the complete reports. Each Aggregator only needs to
+store an aggregate share for each possible batch bucket i.e., the batch
+interval for time-interval or batch ID for leader-selected, along with a flag
+indicating whether the aggregate share has been collected. This is due to the
+requirement for queries to respect bucket boundaries. See {{batch-validation}}.
 
 However, Aggregators are also required to implement several per-report checks
 that require retaining a number of data artifacts. For example, to detect replay
@@ -3163,14 +3198,25 @@ service has no obvious way to authenticate its report uploads.
 
 ## Anonymizing Proxies {#anon-proxy}
 
-Client reports can contain auxiliary information such as source IP, HTTP user
-agent, or Client authentication information (in deployments which use it, see
-{{client-auth}}). This metadata can be used by Aggregators to identify
-participating Clients or permit some attacks on robustness. This auxiliary
-information can be removed by having Clients submit reports to an anonymizing
-proxy server which would then use Oblivious HTTP {{!RFC9458}} to forward reports
-to the DAP Leader. In this scenario, Client authentication would be performed by
-the proxy rather than any of the participants in the DAP protocol.
+Client reports may be transmitted alongside auxiliary information such as
+source IP, HTTP user agent, or Client authentication information (in
+deployments which use it, see {{client-auth}}). This metadata can be used by
+Aggregators to identify participating Clients or permit some attacks on
+robustness. This auxiliary information can be removed by having Clients submit
+reports to an anonymizing proxy server which would then use Oblivious HTTP
+{{!RFC9458}} to forward reports to the DAP Leader. In this scenario, Client
+authentication would be performed by the proxy rather than any of the
+participants in the DAP protocol.
+
+The report itself may contain deanonmyizing information that cannot be removed
+by a proxy:
+
+* The report timestamp indicates when a report was generated and may help an
+  attacker to deduce which Client generated it. Truncating this timestamp as
+  described in {{timestamps}} can help.
+
+* The public extensions may help the attacker to profile the Client's
+  configuration.
 
 ## Differential Privacy {#dp}
 
